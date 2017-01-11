@@ -257,7 +257,7 @@ class StateMachineManager(val serviceHub: ServiceHubInternal,
             if (peerParty != null) {
                 if (message is SessionConfirm) {
                     logger.debug { "Received session confirmation but associated fiber has already terminated, so sending session end" }
-                    sendSessionMessage(peerParty, SessionEnd(message.initiatedSessionId))
+                    sendSessionMessage(peerParty, SessionEnd(message.initiatedSessionId, null))
                 } else {
                     logger.trace { "Ignoring session end message for already closed session: $message" }
                 }
@@ -331,7 +331,7 @@ class StateMachineManager(val serviceHub: ServiceHubInternal,
             processIORequest(ioRequest)
             decrementLiveFibers()
         }
-        fiber.actionOnEnd = {
+        fiber.actionOnEnd = { error ->
             try {
                 fiber.logic.progressTracker?.currentStep = ProgressTracker.DONE
                 mutex.locked {
@@ -340,7 +340,7 @@ class StateMachineManager(val serviceHub: ServiceHubInternal,
                     unfinishedFibers.countDown()
                     notifyChangeObservers(fiber, AddOrRemove.REMOVE)
                 }
-                endAllFiberSessions(fiber)
+                endAllFiberSessions(fiber, error)
             } finally {
                 decrementLiveFibers()
             }
@@ -352,12 +352,15 @@ class StateMachineManager(val serviceHub: ServiceHubInternal,
         }
     }
 
-    private fun endAllFiberSessions(fiber: FlowStateMachineImpl<*>) {
+    private fun endAllFiberSessions(fiber: FlowStateMachineImpl<*>, error: Throwable?) {
         openSessions.values.removeIf { session ->
             if (session.fiber == fiber) {
                 val initiatedState = session.state as? FlowSessionState.Initiated
                 if (initiatedState != null) {
-                    sendSessionMessage(initiatedState.peerParty, SessionEnd(initiatedState.peerSessionId), fiber)
+                    sendSessionMessage(
+                            initiatedState.peerParty,
+                            SessionEnd(initiatedState.peerSessionId, error?.message),
+                            fiber)
                     recentlyClosedSessions[session.ourSessionId] = initiatedState.peerParty
                 }
                 true

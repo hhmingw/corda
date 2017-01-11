@@ -29,7 +29,7 @@ data class SessionData(override val recipientSessionId: Long, val payload: Any) 
     }
 }
 
-data class SessionEnd(override val recipientSessionId: Long) : ExistingSessionMessage
+data class SessionEnd(override val recipientSessionId: Long, val errorMessage: String?) : ExistingSessionMessage
 
 data class ReceivedSessionMessage<out M : ExistingSessionMessage>(val sender: Party, val message: M)
 

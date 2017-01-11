@@ -49,7 +49,7 @@ class FlowStateMachineImpl<R>(override val id: StateMachineRunId,
     // These fields shouldn't be serialised, so they are marked @Transient.
     @Transient lateinit override var serviceHub: ServiceHubInternal
     @Transient internal lateinit var actionOnSuspend: (FlowIORequest) -> Unit
-    @Transient internal lateinit var actionOnEnd: () -> Unit
+    @Transient internal lateinit var actionOnEnd: (Throwable?) -> Unit
     @Transient internal lateinit var database: Database
     @Transient internal var fromCheckpoint: Boolean = false
     @Transient internal var txTrampoline: Transaction? = null
@@ -86,14 +86,14 @@ class FlowStateMachineImpl<R>(override val id: StateMachineRunId,
         val result = try {
             logic.call()
         } catch (t: Throwable) {
-            actionOnEnd()
+            actionOnEnd(t)
             commitTransaction()
             _resultFuture?.setException(t)
             throw ExecutionException(t)
         }
 
         // This is to prevent actionOnEnd being called twice if it throws an exception
-        actionOnEnd()
+        actionOnEnd(null)
         commitTransaction()
         _resultFuture?.set(result)
         return result
@@ -232,8 +232,12 @@ class FlowStateMachineImpl<R>(override val id: StateMachineRunId,
 
         if (receivedMessage.message is SessionEnd) {
             openSessions.values.remove(session)
-            throw FlowException("Party ${session.state.sendToParty} has ended their flow but we were expecting to " +
-                    "receive ${receiveRequest.receiveType.simpleName} from them")
+            val exceptionMessage = if (receivedMessage.message.errorMessage != null) {
+                "'s flow has terminated due to an error: ${receivedMessage.message.errorMessage}"
+            } else {
+                "has ended their flow but we were expecting to receive ${receiveRequest.receiveType.simpleName} from them"
+            }
+            throw FlowException("${session.state.sendToParty} $exceptionMessage")
         } else if (receiveRequest.receiveType.isInstance(receivedMessage.message)) {
             @Suppress("UNCHECKED_CAST")
             return receivedMessage as ReceivedSessionMessage<M>
@@ -271,7 +275,7 @@ class FlowStateMachineImpl<R>(override val id: StateMachineRunId,
     private fun processException(t: Throwable) {
         // This can get called in actionOnSuspend *after* we commit the database transaction, so optionally open a new one here.
         databaseTransaction(database) {
-            actionOnEnd()
+            actionOnEnd(null)  // We don't pass the throwable as it's a system error and not relevant to the other side
         }
         _resultFuture?.setException(t)
     }
